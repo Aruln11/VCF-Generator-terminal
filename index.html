@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VCF Generator Terminal</title>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
+        :root {
+            --bg-color: #0d021a;
+            --main-color: #00f0ff;
+            --accent-color: #ff00ff;
+            --success-color: #39ff14;
+            --error-color: #ff4d4d;
+            --info-color: #ffff00;
+        }
+        html, body {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+        }
+        body { background-color: var(--bg-color); background-image: linear-gradient(rgba(0, 240, 255, 0.07) 1px, transparent 1px), linear-gradient(90deg, rgba(0, 240, 255, 0.07) 1px, transparent 1px); background-size: 30px 30px; color: var(--main-color); font-family: 'Share Tech Mono', monospace; font-size: 16px; animation: fadeInBg 2s ease; padding: 20px; box-sizing: border-box; }
+        @keyframes fadeInBg { from { opacity: 0; } to { opacity: 1; } }
+        #terminal { background-color: rgba(20, 30, 45, 0.85); backdrop-filter: blur(10px); border: 1px solid rgba(0, 240, 255, 0.2); border-radius: 8px; height: 100%; overflow-y: auto; padding: 20px; box-shadow: 0 0 25px rgba(0, 240, 255, 0.3); animation: slideIn 1s ease-out; box-sizing: border-box; }
+        @keyframes slideIn { from { transform: translateY(30px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+        
+        #output p { margin: 5px 0; white-space: pre-wrap; word-wrap: break-word; text-shadow: 0 0 5px var(--main-color); }
+        .prompt-line { display: flex; align-items: center; margin-top: 1em; }
+        .prompt-text { color: #f7f7f7; text-shadow: none; }
+        
+        #commandInput { background-color: transparent; border: none; color: var(--main-color); font-family: inherit; font-size: inherit; flex-grow: 1; outline: none; padding-left: 10px; text-shadow: 0 0 5px var(--main-color); }
+        #commandInput:focus { animation: blink 1s step-end infinite; }
+        @keyframes blink { from, to { box-shadow: 2px 0 0 0 var(--main-color); } 50% { box-shadow: none; } }
+        #contacts-area { width: 98%; height: 150px; background: rgba(0, 0, 0, 0.3); color: var(--main-color); border: 1px solid rgba(0, 240, 255, 0.3); border-radius: 4px; margin-top: 10px; font-family: inherit; font-size: inherit; resize: vertical; }
+        .terminal-button { background-color: transparent; border: 1px solid var(--main-color); color: var(--main-color); font-family: 'Share Tech Mono', monospace; padding: 8px 15px; margin-top: 10px; cursor: pointer; text-shadow: 0 0 5px var(--main-color); transition: all 0.2s ease-in-out; display: inline-block; margin-right: 10px; }
+        .terminal-button:hover { background-color: rgba(0, 240, 255, 0.2); box-shadow: 0 0 15px rgba(0, 240, 255, 0.5); }
+        input[type="file"] { display: none; }
+        a { color: var(--accent-color); text-decoration: none; text-shadow: 0 0 5px var(--accent-color); transition: all 0.2s ease-in-out; }
+        a:hover { color: #ffffff; background-color: rgba(255, 0, 255, 0.3); }
+        .success { color: var(--success-color); text-shadow: 0 0 5px var(--success-color);}
+        .error { color: var(--error-color); text-shadow: 0 0 5px var(--error-color); }
+        .info { color: var(--info-color); text-shadow: 0 0 5px var(--info-color); }
+        
+        @media (max-width: 600px) {
+            body { padding: 10px; font-size: 14px; }
+            #terminal { padding: 10px; }
+        }
+    </style>
+</head>
+<body>
+    <div id="terminal">
+        <div id="output"></div>
+        <div class="prompt-line">
+            <span class="prompt-text">>_</span>
+            <input type="text" id="commandInput" autofocus>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const output = document.getElementById('output');
+            const input = document.getElementById('commandInput');
+            const terminal = document.getElementById('terminal');
+            const promptLine = document.querySelector('.prompt-line');
+            let stage = 'welcome';
+            let params = {};
+
+            function print(message, className = '') { const p = document.createElement('p'); p.className = className; p.innerHTML = message; output.appendChild(p); terminal.scrollTop = terminal.scrollHeight; }
+            function showInput() { promptLine.style.display = 'flex'; input.focus(); }
+            function hideInput() { promptLine.style.display = 'none'; }
+            function clearScreen() { output.innerHTML = ''; }
+
+            function showHelp() {
+                print("\nBantuan Perintah:", "info");
+                print("  mulai  - Memulai proses pembuatan file VCF.");
+                print("  batal  - Membatalkan proses saat ini dan kembali ke awal.");
+                print("  proses - Mengkonfirmasi pengaturan dan memulai pembuatan file.");
+                print("  cls    - Membersihkan layar terminal.");
+                print("  help   - Menampilkan pesan bantuan ini.");
+            }
+            
+            function createVCFs(contacts, perFile, fileBase, nameBase) {
+                const allContacts = contacts.split('\n').filter(line => line.trim() !== '');
+                const totalContacts = allContacts.length;
+                if (totalContacts === 0) { print("Tidak ada kontak valid untuk diproses.", "error"); return null; }
+                const vcfData = [];
+                let filesGenerated = 0;
+                for (let i = 0; i < totalContacts; i += perFile) {
+                    const chunk = allContacts.slice(i, i + perFile);
+                    let vcfContent = '';
+                    chunk.forEach((number, index) => {
+                        const contactIndex = i + index + 1;
+                        const contactName = `${nameBase} ${contactIndex}`;
+                        vcfContent += `BEGIN:VCARD\nVERSION:3.0\nFN:${contactName}\nTEL;TYPE=CELL:${number.trim()}\nEND:VCARD\n\n`;
+                    });
+                    filesGenerated++;
+                    const fileName = `${fileBase}_${filesGenerated}.vcf`;
+                    vcfData.push({ name: fileName, content: vcfContent });
+                }
+                return vcfData;
+            }
+
+            function generateAndDownloadIndividualFiles(vcfData, fileBase) {
+                print("\nMembuat link download individual...", "info");
+                vcfData.forEach(file => {
+                    const blob = new Blob([file.content], { type: 'text/vcard;charset=utf-8' });
+                    const link = document.createElement('a');
+                    link.href = URL.createObjectURL(blob);
+                    link.download = file.name;
+                    link.innerHTML = `[ Download ${file.name} ]`;
+                    const p = document.createElement('p'); p.appendChild(link); output.appendChild(p);
+                });
+                print(`\nBerhasil! ${vcfData.length} link download telah dibuat.`, 'success');
+                
+                if (vcfData.length > 1) {
+                    const downloadAllButton = document.createElement('button');
+                    downloadAllButton.innerHTML = `[ Download Semua sebagai ZIP ]`;
+                    downloadAllButton.className = 'terminal-button';
+                    downloadAllButton.style.marginTop = '15px';
+                    downloadAllButton.onclick = () => {
+                        generateAndDownloadZIP(vcfData, fileBase, true);
+                        downloadAllButton.remove();
+                    };
+                    output.appendChild(downloadAllButton);
+                }
+            }
+
+            function generateAndDownloadZIP(vcfData, fileBase, calledFromIndividual = false) {
+                if (!calledFromIndividual) {
+                    print("\nMenggabungkan file ke dalam ZIP...", "info");
+                }
+                const zip = new JSZip();
+                vcfData.forEach(file => { zip.file(file.name, file.content); });
+                zip.generateAsync({ type: "blob" }).then(function(content) {
+                    const link = document.createElement('a');
+                    const zipFileName = `${fileBase}.zip`;
+                    link.href = URL.createObjectURL(content);
+                    link.download = zipFileName;
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    if (!calledFromIndividual) {
+                        print(`\nBerhasil! File ${zipFileName} telah diunduh.`, 'success');
+                    }
+                });
+            }
+            
+            function proceedToNextStage(contactsContent) {
+                params.contacts = contactsContent;
+                const contactCount = (params.contacts || '').split('\n').filter(line => line.trim() !== '').length;
+                if (contactCount === 0) { print("Konten tidak berisi kontak yang valid. Proses dibatalkan.", "error"); stage = 'welcome'; showPrompt(); return; }
+                print(`[+] Diterima ${contactCount} kontak valid.`, "success");
+                stage = 'get_per_file';
+                showPrompt();
+            }
+
+            function showPrompt() {
+                switch (stage) {
+                    case 'welcome':
+                        print("VCF GENERATOR v7.1\n--------------------\nKetik 'mulai' untuk inisiasi proses atau 'help' untuk bantuan.");
+                        break;
+                    case 'get_input_method':
+                        print("\nPilih Metode Input:");
+                        hideInput();
+                        const buttonContainer = document.createElement('div');
+                        const uploadButton = document.createElement('button');
+                        uploadButton.textContent = "[ Upload File.txt ]";
+                        uploadButton.className = 'terminal-button';
+                        uploadButton.onclick = () => { params.inputMethod = 'upload'; buttonContainer.remove(); stage = 'handle_upload'; showPrompt(); };
+                        const pasteButton = document.createElement('button');
+                        pasteButton.textContent = "[ Paste dari Teks ]";
+                        pasteButton.className = 'terminal-button';
+                        pasteButton.onclick = () => { params.inputMethod = 'paste'; buttonContainer.remove(); stage = 'handle_paste'; showPrompt(); };
+                        buttonContainer.appendChild(uploadButton);
+                        buttonContainer.appendChild(pasteButton);
+                        output.appendChild(buttonContainer);
+                        break;
+                    case 'handle_paste':
+                        print("\nSilakan salin dan tempel semua daftar kontak Anda di bawah ini.");
+                        hideInput();
+                        const textarea = document.createElement('textarea'); textarea.id = 'contacts-area'; output.appendChild(textarea);
+                        const doneButton = document.createElement('button'); doneButton.textContent = "[ Lanjutkan ]"; doneButton.className = 'terminal-button'; output.appendChild(doneButton);
+                        textarea.focus();
+                        doneButton.onclick = () => { textarea.remove(); doneButton.remove(); showInput(); proceedToNextStage(textarea.value.trim()); };
+                        break;
+                    case 'handle_upload':
+                        hideInput();
+                        print("\nSilakan pilih file .txt yang berisi daftar kontak Anda.");
+                        const fileInput = document.createElement('input'); fileInput.type = 'file'; fileInput.accept = '.txt';
+                        const uploadLabel = document.createElement('label'); uploadLabel.textContent = "[ Pilih File dari Komputer/HP ]"; uploadLabel.className = 'terminal-button';
+                        output.appendChild(fileInput); output.appendChild(uploadLabel);
+                        uploadLabel.onclick = () => fileInput.click();
+                        fileInput.onchange = (e) => {
+                            const file = e.target.files[0]; if (!file) { showInput(); return; };
+                            print(`Membaca file: ${file.name}...`);
+                            const reader = new FileReader();
+                            reader.onload = (event) => { uploadLabel.remove(); fileInput.remove(); showInput(); proceedToNextStage(event.target.result); };
+                            reader.onerror = () => { print("Gagal membaca file.", "error"); showInput(); stage = 'welcome'; showPrompt(); };
+                            reader.readAsText(file);
+                        };
+                        break;
+                    case 'get_per_file': print("\nTentukan jumlah kontak per file (Contoh: 25)"); break;
+                    case 'get_file_base': print("\nMasukan nama file output (Contoh: Fanny)"); break;
+                    case 'get_name_base': print("\nBerikan nama isi kontak (Contoh: dark sistem)"); break;
+                    case 'confirm':
+                        print("\n--// Konfirmasi Pengaturan //--");
+                        print(`  - Metode Input     : <span class="info">${params.inputMethod}</span>`);
+                        print(`  - Jumlah per File  : <span class="info">${params.per_file}</span>`);
+                        print(`  - Nama File        : <span class="info">${params.file_base}</span>`);
+                        print(`  - Nama Kontak      : <span class="info">${params.name_base}</span>`);
+                        print(`Ketik 'proses' untuk membuat file, atau 'batal' untuk mengulang.`);
+                        break;
+                }
+            }
+            
+            input.addEventListener('keydown', function(e) {
+                if (e.key === 'Enter') {
+                    const command = input.value.trim().toLowerCase();
+                    if (command === '') return;
+                    print(`>_ ${input.value.trim()}`);
+                    input.value = '';
+
+                    // --- FITUR BARU: Perintah Global ---
+                    if (command === 'cls') {
+                        clearScreen();
+                        showPrompt();
+                        return;
+                    }
+                    if (command === 'help') {
+                        showHelp();
+                        return;
+                    }
+                    // --- AKHIR FITUR BARU ---
+
+                    switch (stage) {
+                        case 'welcome':
+                            if (command === 'mulai') {
+                                stage = 'get_input_method';
+                                showPrompt();
+                            } else {
+                                print(`Perintah tidak valid. Gunakan 'mulai' atau 'help'.`, 'error');
+                            }
+                            break;
+                        case 'get_per_file':
+                            const num = parseInt(command);
+                            if (isNaN(num) || num <= 0) {
+                                print("Error: Masukkan angka positif.", "error");
+                            } else {
+                                params.per_file = num;
+                                stage = 'get_file_base';
+                                showPrompt();
+                            }
+                            break;
+                        case 'get_file_base':
+                            params.file_base = command;
+                            stage = 'get_name_base';
+                            showPrompt();
+                            break;
+                        case 'get_name_base':
+                            params.name_base = command;
+                            stage = 'confirm';
+                            showPrompt();
+                            break;
+                        case 'confirm':
+                            if (command === 'proses') {
+                                const vcfData = createVCFs(params.contacts, params.per_file, params.file_base, params.name_base);
+                                if (vcfData) {
+                                    if (params.inputMethod === 'upload') {
+                                        generateAndDownloadIndividualFiles(vcfData, params.file_base);
+                                    } else { // 'paste'
+                                        generateAndDownloadZIP(vcfData, params.file_base);
+                                    }
+                                    print("\n[+] Proses selesai. Ketik 'mulai' untuk sesi baru atau 'help' untuk bantuan.");
+                                }
+                                stage = 'welcome';
+                            } else if (command === 'batal') {
+                                stage = 'welcome';
+                                print("Proses dibatalkan.", 'info');
+                                showPrompt();
+                            } else {
+                                print("Perintah tidak valid. Gunakan 'proses' atau 'batal'.", 'error');
+                            }
+                            break;
+                    }
+                }
+            });
+            showPrompt();
+        });
+    </script>
+</body>
+</html>
